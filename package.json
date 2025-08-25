@@ -12,7 +12,7 @@
 		"start:dev": "nodemon launcher.js",
 		"test": "echo \"Error: no test specified\" && exit 1",
 		"package": "pkg . --targets node18-macos-x64,node18-linux-x64 --out-path dist",
-		"package:win": "pkg . --targets node18-win-x64 --output dist/linkey-launcher"
+		"package:win": "pkg . --targets node18-win-x64 --output dist/linkey-launcher",
 	},
 	"dependencies": {
 		"cors": "^2.8.5",
