@@ -4,6 +4,7 @@ const { exec } = require("child_process");
 const os = require("os");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const PORT = process.env.PORT || 3000;
 
@@ -12,6 +13,50 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+// --- Bearer token auth setup -------------------------------------------
+// If API_TOKEN env provided, treat as fixed (no rotation).
+// Otherwise generate an ephemeral token that auto-rotates every 10 minutes.
+let currentToken =
+	process.env.API_TOKEN || crypto.randomBytes(32).toString("hex");
+let previousToken = null; // last token kept briefly for grace period
+let previousTokenExpiresAt = 0;
+
+if (process.env.API_TOKEN) {
+	console.log(
+		"[Auth] Using fixed API token from environment (no rotation).\n"
+	);
+} else {
+	console.log(
+		"[Auth] Generated ephemeral API token (will rotate every 10m)."
+	);
+
+	function rotateToken() {
+		previousToken = currentToken;
+		previousTokenExpiresAt = Date.now() + 2 * 60 * 1000; // 2m grace
+		currentToken = crypto.randomBytes(32).toString("hex");
+		console.log("[Auth] Rotated API token. New token:", currentToken);
+	}
+	// Rotate every 10 minutes
+	setInterval(rotateToken, 10 * 60 * 1000);
+}
+
+function bearerAuth(req, res, next) {
+	const header = req.get("authorization") || "";
+	if (!header.startsWith("Bearer ")) {
+		return res.status(401).json({ error: "Missing bearer token" });
+	}
+	const token = header.slice(7).trim();
+	if (token === currentToken) return next();
+	if (
+		previousToken &&
+		token === previousToken &&
+		Date.now() < previousTokenExpiresAt
+	) {
+		return next();
+	}
+	return res.status(401).json({ error: "Invalid token" });
+}
 
 function getStoragePath() {
 	const platform = os.platform();
@@ -216,7 +261,13 @@ function buildExeMap() {
 }
 let browserExeMap = buildExeMap();
 
-app.post("/open", (req, res) => {
+// Public endpoint to retrieve current token so the frontend can persist it.
+app.get("/token", (_req, res) => {
+	res.set("Cache-Control", "no-store");
+	res.json({ token: currentToken, rotating: !process.env.API_TOKEN });
+});
+
+app.post("/open", bearerAuth, (req, res) => {
 	const { url } = req.body;
 	if (!url) return res.status(400).send("Missing URL");
 
@@ -242,11 +293,11 @@ app.post("/open", (req, res) => {
 	res.send(`Opening ${url} in ${enabledList.length} enabled profiles...`);
 });
 
-app.get("/profiles", (_req, res) => {
+app.get("/profiles", bearerAuth, (_req, res) => {
 	res.json(detectProfiles());
 });
 
-app.post("/toggle-profile", (req, res) => {
+app.post("/toggle-profile", bearerAuth, (req, res) => {
 	const { dirName, browser } = req.body;
 	if (!dirName) return res.status(400).send("Missing profile dirName");
 

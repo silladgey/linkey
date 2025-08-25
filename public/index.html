@@ -19,7 +19,7 @@
 			<header class="app-header">
 				<h1 class="app-title">Linkey</h1>
 				<p class="app-subtitle">
-					Quickly beam a link to your launcher service.
+					Quickly beam a link to your browsers.
 				</p>
 			</header>
 			<form id="linkForm" class="card" autocomplete="off" novalidate>
@@ -62,12 +62,12 @@
 					aria-busy="true"
 				></div>
 				<p class="hint small">
-					Click a profile to enable / disable it. Enabled profiles
-					will receive links.
+					Click a profile to enable/disable it. Enabled profiles will
+					receive links.
 				</p>
 			</section>
 			<footer class="footer">
-				<small>Made by Richard Szilagyi </small>
+				<small>Made by Richard Szilagyi • </small>
 				<small>Linkey © <span id="year"></span></small>
 			</footer>
 		</main>
@@ -85,6 +85,46 @@
 			const btn = document.getElementById("sendBtn");
 			const toast = document.getElementById("toast");
 			const profilesList = document.getElementById("profilesList");
+
+			async function ensureToken() {
+				try {
+					const res = await fetch("/token", { cache: "no-store" });
+					if (!res.ok) throw new Error("token fetch failed");
+					const data = await res.json();
+					if (data.token) {
+						const existing = localStorage.getItem("linkeyToken");
+						if (existing !== data.token) {
+							console.log(
+								"[Linkey] Updated API token from server."
+							);
+						}
+						localStorage.setItem("linkeyToken", data.token);
+					}
+				} catch (e) {
+					console.warn("[Linkey] Could not obtain token:", e);
+				}
+			}
+
+			// Refresh token slightly before server rotation (server rotates 10m, so refresh every 9m)
+			setInterval(ensureToken, 9 * 60 * 1000);
+
+			async function fetchWithAuth(url, options = {}, retry = true) {
+				const res = await fetch(url, {
+					...options,
+					headers: authHeaders(options.headers || {}),
+				});
+				if (res.status === 401 && retry) {
+					await ensureToken();
+					return fetchWithAuth(url, options, false);
+				}
+				return res;
+			}
+
+			function authHeaders(base = {}) {
+				const token = localStorage.getItem("linkeyToken");
+				if (token) return { ...base, Authorization: `Bearer ${token}` };
+				return base;
+			}
 			document.getElementById("year").textContent =
 				new Date().getFullYear();
 
@@ -103,11 +143,14 @@
 				btn.disabled = true;
 				btn.classList.add("loading");
 				try {
-					const res = await fetch("http://localhost:3000/open", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ url }),
-					});
+					const res = await fetchWithAuth(
+						"http://localhost:3000/open",
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ url }),
+						}
+					);
 					if (!res.ok)
 						throw new Error(`Server responded ${res.status}`);
 					showToast("Link sent ✔");
@@ -132,7 +175,9 @@
 				profilesList.setAttribute("aria-busy", "true");
 				profilesList.textContent = "";
 				try {
-					const res = await fetch("http://localhost:3000/profiles");
+					const res = await fetchWithAuth(
+						"http://localhost:3000/profiles"
+					);
 					if (!res.ok) throw new Error();
 					const profiles = await res.json();
 					if (!profiles.length) {
@@ -163,7 +208,7 @@
 
 			async function toggleProfile(dirName, chipEl) {
 				try {
-					const res = await fetch(
+					const res = await fetchWithAuth(
 						"http://localhost:3000/toggle-profile",
 						{
 							method: "POST",
@@ -183,8 +228,11 @@
 				}
 			}
 
-			loadProfiles();
-			setInterval(loadProfiles, 15000);
+			// Acquire token first then load profiles periodically.
+			ensureToken().finally(() => {
+				loadProfiles();
+				setInterval(loadProfiles, 15000);
+			});
 		</script>
 	</body>
 </html>
