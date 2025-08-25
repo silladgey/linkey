@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Send a Link</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+			rel="stylesheet"
+		/>
+		<link rel="stylesheet" href="styles.css" />
+		<meta name="color-scheme" content="dark light" />
+	</head>
+	<body>
+		<div class="bg-decor" aria-hidden="true"></div>
+		<main class="app-shell" id="app">
+			<header class="app-header">
+				<h1 class="app-title">Linkey</h1>
+				<p class="app-subtitle">
+					Quickly beam a link to your launcher service.
+				</p>
+			</header>
+			<form id="linkForm" class="card" autocomplete="off" novalidate>
+				<label for="url" class="visually-hidden">URL to open</label>
+				<div class="field-group">
+					<input
+						type="url"
+						id="url"
+						class="input"
+						placeholder="https://example.com/article"
+						required
+						inputmode="url"
+					/>
+				</div>
+				<button
+					type="submit"
+					class="btn-primary"
+					id="sendBtn"
+					aria-live="polite"
+				>
+					<span class="btn-label">Send Link</span>
+					<span class="btn-progress" aria-hidden="true"></span>
+				</button>
+				<p class="hint">
+					Press Enter to send. We'll open it on the target machine.
+				</p>
+			</form>
+
+			<section
+				class="card"
+				id="profilesCard"
+				aria-label="Browser Profiles"
+			>
+				<h2 class="section-title">Profiles</h2>
+				<div
+					id="profilesList"
+					class="profiles-list"
+					role="list"
+					aria-live="polite"
+					aria-busy="true"
+				></div>
+				<p class="hint small">
+					Click a profile to enable / disable it. Enabled profiles
+					will receive links.
+				</p>
+			</section>
+			<footer class="footer">
+				<small>Made by Richard Szilagyi </small>
+				<small>Linkey © <span id="year"></span></small>
+			</footer>
+		</main>
+		<div
+			class="toast"
+			id="toast"
+			role="status"
+			aria-live="polite"
+			aria-atomic="true"
+		></div>
+
+		<script>
+			const form = document.getElementById("linkForm");
+			const urlInput = document.getElementById("url");
+			const btn = document.getElementById("sendBtn");
+			const toast = document.getElementById("toast");
+			const profilesList = document.getElementById("profilesList");
+			document.getElementById("year").textContent =
+				new Date().getFullYear();
+
+			function showToast(message, type = "success") {
+				toast.textContent = message;
+				toast.className = `toast show ${type}`;
+				setTimeout(() => {
+					toast.className = "toast";
+				}, 2600);
+			}
+
+			form.addEventListener("submit", async (e) => {
+				e.preventDefault();
+				const url = urlInput.value.trim();
+				if (!url) return;
+				btn.disabled = true;
+				btn.classList.add("loading");
+				try {
+					const res = await fetch("http://localhost:3000/open", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ url }),
+					});
+					if (!res.ok)
+						throw new Error(`Server responded ${res.status}`);
+					showToast("Link sent ✔");
+					form.reset();
+					urlInput.focus();
+				} catch (err) {
+					console.error(err);
+					showToast("Failed to send", "error");
+				}
+				btn.disabled = false;
+				btn.classList.remove("loading");
+			});
+
+			// Allow paste + go with Ctrl+Enter / Cmd+Enter
+			urlInput.addEventListener("keydown", (e) => {
+				if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+					form.requestSubmit();
+				}
+			});
+
+			async function loadProfiles() {
+				profilesList.setAttribute("aria-busy", "true");
+				profilesList.textContent = "";
+				try {
+					const res = await fetch("http://localhost:3000/profiles");
+					if (!res.ok) throw new Error();
+					const profiles = await res.json();
+					if (!profiles.length) {
+						profilesList.innerHTML = `<span class="hint small">No profiles detected.</span>`;
+						return;
+					}
+					profiles.forEach((p) => {
+						const chip = document.createElement("button");
+						chip.type = "button";
+						chip.className = "profile-chip";
+						const dirName = p.dirName || p.id; // fallback
+						chip.dataset.dirName = p.dirName;
+						chip.dataset.enabled = p.enabled;
+						chip.setAttribute("role", "listitem");
+						chip.setAttribute("aria-pressed", p.enabled);
+						chip.innerHTML = `<span class="status-dot" aria-hidden="true"></span><span>${p.browser} • ${p.name}</span>`;
+						chip.addEventListener("click", () =>
+							toggleProfile(dirName, chip)
+						);
+						profilesList.appendChild(chip);
+					});
+				} catch (e) {
+					profilesList.innerHTML = `<span class="hint small">Failed to load profiles.</span>`;
+				} finally {
+					profilesList.removeAttribute("aria-busy");
+				}
+			}
+
+			async function toggleProfile(dirName, chipEl) {
+				try {
+					const res = await fetch(
+						"http://localhost:3000/toggle-profile",
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ dirName }),
+						}
+					);
+					if (!res.ok) throw new Error();
+					const data = await res.json();
+					chipEl.dataset.enabled = data.enabled;
+					chipEl.setAttribute("aria-pressed", data.enabled);
+					showToast(
+						`${data.enabled ? "Enabled" : "Disabled"} ${dirName}`
+					);
+				} catch (e) {
+					showToast("Toggle failed", "error");
+				}
+			}
+
+			loadProfiles();
+			setInterval(loadProfiles, 15000);
+		</script>
+	</body>
+</html>
