@@ -35,7 +35,7 @@ if (process.env.API_TOKEN) {
 		previousToken = currentToken;
 		previousTokenExpiresAt = Date.now() + 2 * 60 * 1000; // 2m grace
 		currentToken = crypto.randomBytes(32).toString("hex");
-		console.log("[Auth] Rotated API token. New token:", currentToken);
+		console.log("[Auth] Rotated API token");
 	}
 	// Rotate every 10 minutes
 	setInterval(rotateToken, 10 * 60 * 1000);
@@ -224,6 +224,10 @@ function detectProfiles() {
 	let profiles = [];
 
 	bases.forEach(({ browser, path: basePath, exe }) => {
+		if (!fs.existsSync(basePath)) {
+			return;
+		}
+
 		try {
 			const dirs = fs.readdirSync(basePath, { withFileTypes: true });
 			const profileNames = readProfileNames(basePath);
@@ -246,7 +250,7 @@ function detectProfiles() {
 				}
 			});
 		} catch (err) {
-			console.warn(`Could not read ${browser} profiles at ${basePath}`);
+			console.warn(`⚠️ Failed to read ${browser} profiles at ${basePath}:`, err);
 		}
 	});
 
@@ -267,7 +271,9 @@ app.get("/token", (_req, res) => {
 	res.json({ token: currentToken, rotating: !process.env.API_TOKEN });
 });
 
-app.post("/open", bearerAuth, (req, res) => {
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+app.post("/open", bearerAuth, async (req, res) => {
 	const { url } = req.body;
 	if (!url) return res.status(400).send("Missing URL");
 
@@ -276,21 +282,27 @@ app.post("/open", bearerAuth, (req, res) => {
 		return res.status(500).send("No enabled profiles found");
 	}
 
-	enabledList.forEach(({ browser, dirName }) => {
+	res.send(`Opening ${url} in ${enabledList.length} enabled profiles...`);
+
+	for (const { browser, dirName } of enabledList) {
 		const exe = browserExeMap.get(browser);
 		if (!exe) {
 			console.warn(`No executable mapping for browser ${browser}`);
-			return;
+			continue;
 		}
-		const fullCommand = `${exe} --profile-directory="${dirName}" "${url}"`;
-		exec(fullCommand, (err) => {
-			if (err)
-				console.error(`Error opening in ${browser} (${dirName}):`, err);
-			else console.log(`Opened ${url} in ${browser}:${dirName}`);
-		});
-	});
 
-	res.send(`Opening ${url} in ${enabledList.length} enabled profiles...`);
+		const fullCommand = `${exe} --profile-directory="${dirName}" "${url}"`;
+
+		exec(fullCommand, (err) => {
+			if (err) {
+				console.error(`Error opening in ${browser} (${dirName}):`, err);
+			} else {
+				console.log(`Opened ${url} in ${browser}:${dirName}`);
+			}
+		});
+
+		await delay(2000);
+	}
 });
 
 app.get("/profiles", bearerAuth, (_req, res) => {
@@ -341,6 +353,35 @@ app.post("/toggle-profile", bearerAuth, (req, res) => {
 	});
 });
 
+/**
+ * Opens a URL in the default system browser.
+ * @param {string} url - The URL to open.
+ */
+function openHomePage() {
+    const platform = os.platform();
+	const url = `http://localhost:${PORT}`
+
+    let command;
+
+    if (platform === "win32") {
+        command = `start "" "${url}"`;
+    } else if (platform === 'darwin') {
+        command = `open "${url}"`;
+    } else {
+        // Most Linux distros
+        command = `xdg-open "${url}"`;
+    }
+
+    exec(command, (error) => {
+        if (error) {
+            console.error("Failed to open URL:", error);
+        }
+    });
+}
+
 app.listen(PORT, () => {
 	console.log(`Server running on http://localhost:${PORT}`);
+
+	console.log(process.env.NODE_ENV);
+		openHomePage();
 });
